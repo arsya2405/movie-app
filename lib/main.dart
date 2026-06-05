@@ -9,7 +9,6 @@ class Movie {
   final int year;
   final String genre;
   final double rating;
-  // 1. Made imageUrl optional by adding "?"
   final String? imageUrl; 
 
   const Movie({
