@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const MyApp());
@@ -21,52 +24,90 @@ class Movie {
     this.imageUrl,
     this.isFavorite = false,
   });
+
+  factory Movie.fromJson(Map<String, dynamic> json) {
+    return Movie(
+      title: json['title'] ?? '',
+      year: json['year'] ?? 0,
+      genre: json['genre'] ?? '',
+      rating: (json['rating'] as num?)?.toDouble() ?? 0.0,
+      imageUrl: json['imageUrl'],
+      isFavorite: json['isFavorite'] ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'title': title,
+      'year': year,
+      'genre': genre,
+      'rating': rating,
+      'imageUrl': imageUrl,
+      'isFavorite': isFavorite,
+    };
+  }
 }
 
 class MovieBloc {
-  final List<Movie> _movies = [
-    Movie(
-      title: "The Shawshank Redemption",
-      year: 1994,
-      genre: "Drama",
-      rating: 9.3,
-      imageUrl: "assets/images/shawshank.jpg",
-    ),
-    Movie(
-      title: "The Godfather",
-      year: 1972,
-      genre: "Crime, Drama",
-      rating: 9.2,
-      imageUrl: "assets/images/godfather.jpg",
-    ),
-    Movie(
-      title: "A Movie Without A Poster",
-      year: 2026,
-      genre: "Mystery",
-      rating: 7.5,
-    ),
-    Movie(
-      title: "A Movie Without A Poster 2",
-      year: 2026,
-      genre: "Mystery",
-      rating: 7.5,
-    ),
-  ];
-
+  List<Movie> _movies = [];
   final StreamController<List<Movie>> _movieStreamController = StreamController<List<Movie>>.broadcast();
 
   Stream<List<Movie>> get movieStream => _movieStreamController.stream;
 
   Future<List<Movie>> fetchInitialMovies() async {
-    await Future.delayed(const Duration(seconds: 2));
-    _movieStreamController.sink.add(_movies);
-    return _movies;
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      final response = await http.get(Uri.parse('https://raw.githubusercontent.com/ArsyaNurafi/static-api/main/movies.json')).timeout(const Duration(seconds: 5));
+      
+      if (response.statusCode == 200) {
+        final List<dynamic> decodedData = json.decode(response.body);
+        final List<Movie> remoteMovies = decodedData.map((json) => Movie.fromJson(json)).toList();
+        
+        final String? cachedFavs = prefs.getString('movie_favorites_keys');
+        if (cachedFavs != null) {
+          final List<dynamic> favTitles = json.decode(cachedFavs);
+          for (var movie in remoteMovies) {
+            if (favTitles.contains(movie.title)) {
+              movie.isFavorite = true;
+            }
+          }
+        }
+
+        _movies = remoteMovies;
+        await _saveToLocal(_movies);
+        _movieStreamController.sink.add(_movies);
+        return _movies;
+      } else {
+        throw Exception();
+      }
+    } catch (_) {
+      final String? localData = prefs.getString('cached_movie_list');
+      if (localData != null) {
+        final List<dynamic> decodedData = json.decode(localData);
+        _movies = decodedData.map((json) => Movie.fromJson(json)).toList();
+        _movieStreamController.sink.add(_movies);
+        return _movies;
+      }
+      return [];
+    }
   }
 
-  void toggleFavorite(Movie targetMovie) {
+  Future<void> _saveToLocal(List<Movie> moviesList) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String encodedData = json.encode(moviesList.map((m) => m.toJson()).toList());
+    await prefs.setString('cached_movie_list', encodedData);
+  }
+
+  void toggleFavorite(Movie targetMovie) async {
     final index = _movies.indexWhere((m) => m.title == targetMovie.title);
     if (index != -1) {
       _movies[index].isFavorite = !_movies[index].isFavorite;
+      
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> favoriteTitles = _movies.where((m) => m.isFavorite).map((m) => m.title).toList();
+      await prefs.setString('movie_favorites_keys', json.encode(favoriteTitles));
+      
+      await _saveToLocal(_movies);
       _movieStreamController.sink.add(List.from(_movies));
     }
   }
